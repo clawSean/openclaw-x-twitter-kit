@@ -1,12 +1,27 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_HANDLE = "edgewallet";
 const FXT_ENDPOINT_HOST = "api.fxtwitter.com";
 const SYNDICATION_ENDPOINT_HOST = "syndication.twitter.com";
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PEEPER_STATE_DIR = join(SCRIPT_DIR, "..", "state", "peeper");
+
+// Node's fetch gets HTTP 429 from syndication.twitter.com even with headers
+// that curl sends successfully as HTTP 200 (TLS/HTTP2 fingerprinting on
+// Twitter's side, not a credential or rate issue). This is a narrow, fixed
+// transport for exactly one public GET target: no shell, no user-supplied
+// binary/args/URL, curl output only.
+const CURL_BIN = "curl";
+const CURL_STATUS_MARKER = "__PEEPER_CURL_HTTP_STATUS__";
+const PUBLIC_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36";
 
 function parseArgs(argv) {
   const args = {
@@ -43,7 +58,7 @@ function parseArgs(argv) {
       console.log(`Usage:
   node peeper.mjs [--handle edgewallet] [--source fx] [--limit 10] [--json]
   node peeper.mjs --watch [--interval 61] [--state .edgewallet-seen.json]
-  node peeper.mjs --watch --on-new 'xurl like {id}'
+  node peeper.mjs --watch
 
 Options:
   --handle <name>       X handle to poll. Default: edgewallet
@@ -52,10 +67,9 @@ Options:
   --watch               Poll forever with local dedupe state
   --once                Run one watch iteration and exit, useful for smoke tests
   --interval <seconds>  Watch interval. Default: 61
-  --state <path>        State file. Default: .<handle>-seen.json
-  --cache <path>        Last-good poll cache. Default: .<handle>-cache.json
-  --on-new <command>    Optional command template for new tweets.
-                        Tokens: {id}, {url}, {handle}
+  --state <path>        State file. Default: state/peeper/<handle>-seen.json under this skill
+  --cache <path>        Last-good poll cache. Default: state/peeper/<handle>-cache.json under this skill
+  --on-new <command>    Deprecated. Command hooks are disabled for safety
   --include-reposts     Include reposts/retweets when the source exposes them
   --include-replies     Include replies when the source exposes them
   --emit-existing       Treat existing timeline tweets as new on first run`);
@@ -68,9 +82,17 @@ Options:
     throw new Error("--source must be fx or syndication");
   }
   args.handle = args.handle.replace(/^@/, "").trim();
-  args.state ||= `.${args.handle.toLowerCase()}-seen.json`;
-  args.cache ||= `.${args.handle.toLowerCase()}-cache.json`;
+  args.state ||= defaultStatePath(args.handle);
+  args.cache ||= defaultCachePath(args.handle);
   return args;
+}
+
+function defaultStatePath(handle) {
+  return join(DEFAULT_PEEPER_STATE_DIR, `${handle.toLowerCase()}-seen.json`);
+}
+
+function defaultCachePath(handle) {
+  return join(DEFAULT_PEEPER_STATE_DIR, `${handle.toLowerCase()}-cache.json`);
 }
 
 function extractNextData(html) {
@@ -123,28 +145,31 @@ function htmlDecode(value) {
     .replace(/&#39;/g, "'");
 }
 
-function poll(args) {
-  if (args.source === "syndication") return pollSyndication(args.handle, args.cache);
-  return pollFx(args.handle, args.cache, {
+async function poll(args) {
+  if (args.source === "syndication") return await pollSyndication(args.handle, args.cache);
+  return await pollFx(args.handle, args.cache, {
     includeReplies: args.includeReplies,
     includeReposts: args.includeReposts,
   });
 }
 
-function pollFx(handle, cachePath, { includeReplies, includeReposts }) {
+async function pollFx(handle, cachePath, { includeReplies, includeReposts }) {
   const url = `https://${FXT_ENDPOINT_HOST}/2/profile/${encodeURIComponent(handle)}/statuses?count=20`;
   let body;
   try {
-    body = fetchWithCurl(url);
+    if (process.env.XTK_TEST_FAIL_FX === "1") {
+      throw new Error("forced FxTwitter test failure");
+    }
+    body = await fetchPublicUrl(url);
   } catch (error) {
-    return pollFreeFallback(handle, cachePath, `FxTwitter fetch failed: ${error.message}`);
+    return await pollFreeFallback(handle, cachePath, `FxTwitter fetch failed: ${error.message}`);
   }
 
   let data;
   try {
     data = JSON.parse(body);
   } catch (error) {
-    return pollFreeFallback(handle, cachePath, `FxTwitter response parse failed: ${error.message}`);
+    return await pollFreeFallback(handle, cachePath, `FxTwitter response parse failed: ${error.message}`);
   }
   const tweets = (data.results || [])
     .map((entry) => normalizeFxTweet(entry, handle))
@@ -156,7 +181,7 @@ function pollFx(handle, cachePath, { includeReplies, includeReposts }) {
   const result = {
     source: url,
     sourceKind: "fx",
-    transport: "curl",
+    transport: "fetch",
     authUsed: false,
     xApiUsed: false,
     xAiUsed: false,
@@ -169,9 +194,9 @@ function pollFx(handle, cachePath, { includeReplies, includeReposts }) {
   return result;
 }
 
-function pollFreeFallback(handle, cachePath, reason) {
+async function pollFreeFallback(handle, cachePath, reason) {
   try {
-    const result = pollSyndication(handle, cachePath);
+    const result = await pollSyndication(handle, cachePath);
     return {
       ...result,
       fallbackFrom: "fx",
@@ -188,11 +213,11 @@ function pollFreeFallback(handle, cachePath, reason) {
   }
 }
 
-function pollSyndication(handle, cachePath) {
+async function pollSyndication(handle, cachePath) {
   const url = `https://${SYNDICATION_ENDPOINT_HOST}/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`;
   let html;
   try {
-    html = fetchWithCurl(url);
+    html = await fetchSyndicationUrl(url);
   } catch (error) {
     const cached = loadCache(cachePath);
     if (!cached) throw error;
@@ -246,7 +271,7 @@ async function main() {
     return;
   }
 
-  const result = poll(args);
+  const result = await poll(args);
   const shownTweets = result.tweets.slice(0, args.limit);
   const output = { ...result, tweets: shownTweets };
 
@@ -271,7 +296,7 @@ async function watch(args) {
   do {
     const startedAt = new Date();
     try {
-      const result = poll(args);
+      const result = await poll(args);
       const state = loadState(args.state);
       const seen = new Set(state.seen || []);
       const firstRun = seen.size === 0;
@@ -292,7 +317,7 @@ async function watch(args) {
         for (const tweet of newTweets) {
           console.log(`${startedAt.toISOString()} NEW ${tweet.id} ${tweet.url}`);
           console.log(tweet.text.slice(0, 220));
-          if (args.onNew) runCommand(args.onNew, tweet, args.handle);
+          if (args.onNew) console.error("--on-new command hooks are disabled; handle new tweet manually");
           seen.add(tweet.id);
           saveState(args.state, seen, startedAt);
         }
@@ -345,43 +370,66 @@ function saveCache(path, result) {
   writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`);
 }
 
-function runCommand(template, tweet, handle) {
-  const command = template
-    .replaceAll("{id}", shellEscape(tweet.id))
-    .replaceAll("{url}", shellEscape(tweet.url))
-    .replaceAll("{handle}", shellEscape(handle));
-  execFileSync("/bin/sh", ["-c", command], { stdio: "inherit" });
-}
-
-function shellEscape(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function fetchWithCurl(url) {
-  const response = execFileSync("curl", [
-    "-sS",
-    "-L",
-    "--max-time",
-    "20",
-    "-A",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
-    "-H",
-    "Accept: text/html,application/xhtml+xml",
-    "-w",
-    "\n__HTTP_STATUS__:%{http_code}\n",
-    url,
-  ], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
-  const marker = "\n__HTTP_STATUS__:";
-  const markerIndex = response.lastIndexOf(marker);
-  if (markerIndex === -1) return response;
-  const body = response.slice(0, markerIndex);
-  const status = Number(response.slice(markerIndex + marker.length).trim());
+async function fetchPublicUrl(url) {
+  const response = await fetch(url, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(20000),
+    headers: {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`public endpoint returned HTTP ${response.status}`);
+  }
+  return await response.text();
+}
+
+async function fetchSyndicationUrl(url) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.hostname !== SYNDICATION_ENDPOINT_HOST) {
+    throw new Error(`refusing curl fetch for unexpected host: ${parsed.hostname}`);
+  }
+
+  let stdout;
+  let stderr;
+  try {
+    ({ stdout, stderr } = await execFileAsync(
+      CURL_BIN,
+      [
+        "-sS",
+        "-L",
+        "--max-time",
+        "20",
+        "-A",
+        PUBLIC_UA,
+        "-H",
+        "Accept: text/html,application/xhtml+xml",
+        "-w",
+        `\n${CURL_STATUS_MARKER}%{http_code}`,
+        url,
+      ],
+      { maxBuffer: 5 * 1024 * 1024 },
+    ));
+  } catch (error) {
+    const message = error.stderr || error.message;
+    throw new Error(`syndication curl failed: ${String(message).trim()}`);
+  }
+
+  const markerIndex = stdout.lastIndexOf(CURL_STATUS_MARKER);
+  if (markerIndex === -1) {
+    throw new Error(`syndication curl returned no status marker${stderr ? `: ${stderr.trim()}` : ""}`);
+  }
+
+  const body = stdout.slice(0, markerIndex).replace(/\n$/, "");
+  const status = Number(stdout.slice(markerIndex + CURL_STATUS_MARKER.length).trim());
   if (status < 200 || status >= 300) {
-    throw new Error(`public endpoint returned HTTP ${status}`);
+    throw new Error(`syndication endpoint returned HTTP ${status}`);
   }
   return body;
 }

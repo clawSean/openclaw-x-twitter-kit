@@ -233,7 +233,7 @@ if [ -z "$out" ]; then
     cat <<'HTML'
 <html><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"timeline":{"entries":[{"type":"tweet","content":{"tweet":{"id_str":"2063297533732962729","created_at":"2026-06-06T16:30:40.000Z","full_text":"EdgeWallet syndication fallback post"}}}]}}}}</script></html>
 HTML
-    printf '\n__HTTP_STATUS__:200\n'
+    printf '\n__PEEPER_CURL_HTTP_STATUS__200\n'
     exit 0
   fi
   if [ "${XTK_TEST_CURL_HTTP_CODE:-200}" = "200" ]; then

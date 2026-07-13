@@ -1,6 +1,11 @@
 ---
-name: x-twitter-kit
-description: Use this single agent-facing Twitter/X kit when monitoring known public accounts with Peeper, searching/researching through xAI x_search, reading exact tweets with xurl, configuring OAuth/bearer access, diagnosing capability, or handling X posting safety.
+name: "x-twitter-kit"
+description: >
+  Routing skill for ALL X/Twitter work. Read before any X task. Picks the right
+  transport: Peeper for known public account monitoring, x_search/xAI/Grok for
+  search and cited discovery, xurl for exact tweet reads, timelines, DMs,
+  posting, and account actions, and browser as approved fallback. The xurl skill
+  is command mechanics only; this skill owns routing policy.
 ---
 
 # X/Twitter Kit
@@ -35,7 +40,7 @@ it.
 
 Pick the operation first, then choose the transport that can perform it safely:
 
-- **Known public-account monitoring** → use bundled Peeper (`scripts/peeper.mjs`) first. It polls public profile endpoints with `curl`, local seen-state, and cache fallback without X API bearer tokens, X OAuth login, xAI/Grok credits, or a paid RSS bridge.
+- **Known public-account monitoring** → use bundled Peeper (`scripts/peeper.mjs`) first. It polls public profile endpoints with local seen-state and cache fallback without X API bearer tokens, X OAuth login, xAI/Grok credits, or a paid RSS bridge.
 - **Ordinary X/Twitter search, research, summaries, and cited discovery** → prefer OpenClaw/xAI `x_search` through the signed-in xAI/Grok auth profile.
 - **Exact tweet URL or tweet ID read** → prefer `xurl read <url-or-id>`; use direct bearer only for deterministic scripts or when `xurl` is unavailable.
 - **Timeline / mentions / account-aware reads** → prefer `xurl`, because these depend on user/account context rather than broad semantic search.
@@ -60,8 +65,10 @@ Access context:
    - Use for "watch @somehandle", "tell me when this account posts", no-credit polling, and known-account monitors where tweet IDs are enough.
    - Run one-shot checks with `node scripts/peeper.mjs --handle edgewallet --limit 5 --json`.
    - Run watch mode with `node scripts/peeper.mjs --handle edgewallet --watch --interval 61`.
+   - By default, Peeper stores seen-state and last-good caches under `state/peeper/` inside this skill, so cwd-root runs do not spray `.<handle>-cache.json` files into the workspace root. Use `--state` and `--cache` only when a project needs its own location.
    - Peeper intentionally avoids X API bearer, X OAuth, xAI/Grok, and paid RSS bridges.
-   - Peeper endpoints are unofficial/undocumented. Default source `fx` falls back to syndication and then stale cache before any authenticated/paid route is considered. Keep polling at 61 seconds or slower, rely on local cache, and back off rather than increasing frequency if the public source rate-limits.
+   - Peeper uses Node `fetch` for FxTwitter. Its syndication source uses a narrow fixed `curl` transport because `syndication.twitter.com` currently rejects Node `fetch` while accepting curl for the same public URL. This is not a generic command hook; `--on-new` remains disabled.
+   - Peeper endpoints are unofficial/undocumented. Default source `fx` falls back to live syndication and then stale cache before any authenticated/paid route is considered. Keep polling at 61 seconds or slower, rely on local cache, and back off rather than increasing frequency if the public source rate-limits.
    - Any Like, repost, reply, bookmark, DM, follow, or post action must be a separate approved `xurl` action or standing policy.
 
 2. **OpenClaw/xAI `x_search` (primary search/research transport)**
