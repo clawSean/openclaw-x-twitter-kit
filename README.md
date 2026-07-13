@@ -77,6 +77,8 @@ assumptions into this public kit.
 
 ```text
 skills/x-twitter-kit/
+├── DECISIONS.md
+├── LOG.md
 ├── SKILL.md
 ├── VISION.md
 ├── fixtures/
