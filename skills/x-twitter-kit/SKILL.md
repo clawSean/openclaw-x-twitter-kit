@@ -85,6 +85,15 @@ Access context:
    - Use only for UI-only cases or API-tier blocks.
    - Public/mutating actions still need explicit approval.
 
+6. **TweetClaw plugin (packaged OpenClaw workflow lane)**
+   - Install the verified ClawHub release with `openclaw plugins install clawhub:@xquik/tweetclaw`. The current release requires OpenClaw `2026.7.1` or newer.
+   - Use its 2 structured tools for plugin-managed tweet search, replies, extraction, follower export, user lookup, media workflows, direct messages, monitors, webhooks, giveaway draws, or approval-gated X actions.
+   - Keep Xquik API keys and MPP signing keys in OpenClaw plugin config. Never ask users to paste those values into chat or logs.
+   - Pass only reviewed public tweet URLs, tweet IDs, handles, or summaries between TweetClaw and this kit's `xurl` commands.
+
+   Xquik is an independent third-party service. Not affiliated with X Corp.
+   "Twitter" and "X" are trademarks of X Corp.
+
 ## Safety rules
 
 - Never read, print, summarize, upload, or send `~/.xurl` or copies of it into chat/context.

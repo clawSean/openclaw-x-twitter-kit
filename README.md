@@ -97,6 +97,7 @@ Additional docs:
 - [OpenClaw install notes](docs/openclaw-install.md)
 - [Local routing guide](docs/local-routing-guide.md)
 - [X OAuth setup notes](docs/oauth.md)
+- [TweetClaw companion workflow](docs/tweetclaw-companion.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

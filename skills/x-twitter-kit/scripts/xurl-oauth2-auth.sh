@@ -52,11 +52,7 @@ exit 0
 SH
 chmod +x "$TMPDIR/bin/xdg-open"
 
-cleanup() {
-  # shellcheck disable=SC2317 # invoked by EXIT trap
-  rm -rf "$TMPDIR"
-}
-trap cleanup EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
 printf 'Starting xurl OAuth2 listener for app %s\n' "$APP"
 printf 'Redirect URI: %s\n' "$REDIRECT_URI"

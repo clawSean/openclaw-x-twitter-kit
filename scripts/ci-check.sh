@@ -12,7 +12,10 @@ done < <(find skills scripts -type f -name '*.sh' -print0)
 
 if command -v shellcheck >/dev/null 2>&1; then
   printf '\n== shellcheck ==\n'
-  mapfile -t shell_files < <(find skills scripts -type f -name '*.sh' | sort)
+  shell_files=()
+  while IFS= read -r file; do
+    shell_files+=("$file")
+  done < <(find skills scripts -type f -name '*.sh' | sort)
   shellcheck "${shell_files[@]}"
 else
   printf '\n== shellcheck skipped: not installed ==\n'
